@@ -1,0 +1,436 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: email-security
+  labels:
+    name: email-security
+
+---
+# ConfigMap: Postfix Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postfix-config
+  namespace: email-security
+data:
+  main.cf: |
+    # Postfix Configuration for CEGP SMTP Relay
+    # This is auto-injected at runtime
+    
+    # Network & Hostname
+    myhostname = relay.email-security.svc.cluster.local
+    mynetworks = 10.0.0.0/8 127.0.0.1/32 [::1]/128
+    inet_interfaces = all
+    inet_protocols = ipv4
+    
+    # Queue & Delivery
+    queue_directory = /var/spool/postfix
+    data_directory = /var/lib/postfix
+    mail_owner = postfix
+    syslog_facility = mail
+    syslog_name = postfix
+    
+    # Message Limits (per CEGP policy)
+    message_size_limit = 52428800
+    recipient_limit = 99999
+    virtual_alias_limit = 999
+    default_process_limit = 100
+    
+    # Relay Configuration
+    relay_domains = $config_directory/relay_domains
+    transport_maps = hash:$config_directory/transport
+    
+    # SMTP Server Settings
+    smtpd_banner = $myhostname ESMTP Trend Micro CEGP Relay
+    smtpd_helo_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_invalid_helo_hostname, permit
+    smtpd_sender_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_non_fqdn_sender, permit
+    smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_non_fqdn_recipient, check_policy_service unix:private/policy-socket, permit
+    
+    # Relay to CEGP (runtime-configured in entrypoint.sh)
+    smtp_tls_security_level = may
+    smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+    smtpd_tls_security_level = may
+    smtpd_tls_cert_file = /etc/certs/relay-cert.pem
+    smtpd_tls_key_file = /etc/certs/relay-key.pem
+    smtpd_tls_protocols = !SSLv2, !SSLv3
+    smtp_tls_protocols = !SSLv2, !SSLv3
+    
+    # Security
+    disable_vrfy_command = yes
+  
+  master.cf: |
+    # SMTP service on port 25 (RFC 5321)
+    smtp      inet  n       -       y       -       -       smtpd
+      -o syslog_name=postfix/smtp
+      -o smtpd_tls_security_level=may
+      -o smtpd_sasl_auth_enable=no
+    
+    # Submission service on port 587 (RFC 6409)
+    submission inet n       -       y       -       -       smtpd
+      -o syslog_name=postfix/submission
+      -o smtpd_tls_security_level=encrypt
+      -o smtpd_sasl_auth_enable=no
+    
+    # SMTPS service on port 465
+    smtps     inet  n       -       y       -       -       smtpd
+      -o syslog_name=postfix/smtps
+      -o smtpd_tls_security_level=encrypt
+    
+    # Policy daemon socket
+    policy    unix  -       n       n       -       -       spawn
+      user=nobody argv=/usr/bin/python3 /opt/relay-policy/relay_policy_daemon.py
+    
+    # Standard Postfix services
+    cleanup   unix  n       -       -       -       0       cleanup
+    qmgr      unix  n       -       n       300     1       qmgr
+    tlsmgr    unix  -       -       -       1000?   1       tlsmgr
+    rewrite   unix  -       -       -       -       -       trivial-rewrite
+    bounce    unix  -       -       -       -       0       bounce
+    defer     unix  -       -       -       -       0       bounce
+    trace     unix  -       -       -       -       0       bounce
+    verify    unix  -       -       -       -       1       verify
+    anvil     unix  -       -       -       1000?   1       anvil
+    proxymap  unix  -       -       n       -       -       proxymap
+    proxywrite unix -       -       n       -       1       proxymap
+    master    unix  -       -       n       -       -       master
+    postlog   unix  -       -       n       -       1       postlogd
+    
+    # Local delivery
+    local     unix  -       n       n       -       -       local
+    virtual   unix  -       n       n       -       -       virtual
+    smtp      unix  -       -       -       -       -       smtp
+    relay     unix  -       -       -       -       -       smtp
+      -o smtp_fallback_relay=
+    error     unix  -       -       -       -       -       error
+    discard   unix  -       -       -       -       -       discard
+
+---
+# ConfigMap: Relay Policy Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: relay-policy
+  namespace: email-security
+data:
+  domains.conf: |
+    # Relay domains (one per line)
+    # Add your customer's email domains here
+    # example.com
+    # subsidiary.org
+    # branch.local
+  
+  permit-ips.conf: |
+    # Permit list in CIDR notation (one per line)
+    # Only these IPs can send mail through this relay
+    # 10.0.0.0/8
+    # 172.16.0.0/12
+    # 192.168.1.0/24
+  
+  rate-limits.conf: |
+    # Rate limit configuration
+    inbound.per_ip_per_minute=2000
+    inbound.per_rcpt_per_minute=200
+    outbound.per_ip_per_5min=1000
+
+---
+# Secret: TLS Certificates (create separately with actual certs)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: relay-tls-certs
+  namespace: email-security
+type: tls
+data:
+  # These are base64-encoded example certs (replace with real certs)
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUN1akNDQWFZQ0NRMEM5dUc0eFkrMEFEQU5CZ2txaGtpRzl3MEJBUXNGQURCMk1Rc3dDUVlEVlFRR0V3SlYKVXpFTU1Bb0dBMVVFQ0JNRFpXMXZNUXN3Q1FZRFZRUUhFd0puYjI5ck1SQXdEZ1lEVlFRS0V3ZHdhMjluCmMzUnlkWE4wTVJZd0ZBWURWUVFMRXcxMGFHVnVjMjlrTG1OdmJUQWVGdzB5TVRBMk1qVXhORFkzTWpKYUYKdzB6TVRBMk1qVXhORFkzTWpKYU1IWXhDekFKQmdOVkJBWVRBbFZUTVF3d0NnWURWUVFJRXdSbGJXOXhNUXN3CkNRWURWUVFIRXdKbmIyOXJNUlF3RWdZRFZRUUtFdzlcXDdaV3hWRVoxcGJtdGxjaTFoYkc5aVlXTjBNQmt3CkZ3WURWUVFERXhCdloyWmxjaTFwYmk5bmNtRjBkWEpsTUlCSTBSd3lNRE13Q2dZRFZRSXhZVWtTVlR4T2V5YwpLRkJRVURWUVFDMzBWVWRWQllaVXRGUHlCRGFXRnNiMkY1TG1SdmJUUkJOQjRLUkVOQmRWQlNRVXRGUHlCTwpwM1ZWYVA9CkZ3d3lNakJFUVRCRVJ6QTQKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQU9DQktVQXdnZ1NFQWdFQXdlWGYKdXdwTjJHOWZGVWVWZElGYVcvYnp4Y3E0VGt0L2VBMVJCUTZ4dTFFfJGhzcnU2ODUwcEIrck5RNFk1Kzg0NApqSVpaYTFnRENVQmhRPT0KLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=
+
+---
+# Deployment: CEGP SMTP Relay
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cegp-smtp-relay
+  namespace: email-security
+  labels:
+    app: cegp-smtp-relay
+    version: v1
+spec:
+  replicas: 3  # Start with 3 replicas
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: cegp-smtp-relay
+  template:
+    metadata:
+      labels:
+        app: cegp-smtp-relay
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      affinity:
+        # Spread pods across nodes for redundancy
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - cegp-smtp-relay
+                topologyKey: kubernetes.io/hostname
+      
+      containers:
+        - name: relay
+          image: company-registry/cegp-smtp-relay:1.0.0
+          imagePullPolicy: IfNotPresent
+          
+          ports:
+            - containerPort: 25
+              name: smtp
+              protocol: TCP
+            - containerPort: 587
+              name: smtp-submission
+              protocol: TCP
+            - containerPort: 465
+              name: smtps
+              protocol: TCP
+            - containerPort: 9090
+              name: metrics
+              protocol: TCP
+          
+          env:
+            # CEGP Configuration
+            - name: CEGP_HOST
+              value: "relay.mx.trendmicro.com"
+            - name: CEGP_PORT
+              value: "25"
+            - name: CEGP_USE_TLS
+              value: "true"
+            
+            # Rate Limiting
+            - name: RATE_LIMIT_IP_PER_MIN
+              value: "2000"
+            - name: RATE_LIMIT_RCPT_PER_MIN
+              value: "200"
+            - name: RATE_LIMIT_OUTBOUND_IP_PER_5MIN
+              value: "1000"
+            
+            # Connection Control
+            - name: CONNECTION_MODE
+              value: "permit"
+            
+            # Message Rules
+            - name: MAX_MESSAGE_SIZE
+              value: "52428800"
+            - name: MAX_RECIPIENTS
+              value: "99999"
+            
+            # TLS Settings
+            - name: TLS_ENABLED
+              value: "true"
+            - name: TLS_CERT_PATH
+              value: "/etc/certs/tls.crt"
+            - name: TLS_KEY_PATH
+              value: "/etc/certs/tls.key"
+            
+            # Files
+            - name: RELAY_DOMAINS_FILE
+              value: "/var/lib/relay-policy/domains.conf"
+            - name: PERMIT_LIST_FILE
+              value: "/var/lib/relay-policy/permit-ips.conf"
+            
+            # Redis
+            - name: REDIS_HOST
+              value: "localhost"
+            - name: REDIS_PORT
+              value: "6379"
+            
+            # Logging
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: PROMETHEUS_PORT
+              value: "9090"
+          
+          volumeMounts:
+            - name: postfix-config
+              mountPath: /etc/postfix/
+              readOnly: true
+            - name: tls-certs
+              mountPath: /etc/certs/
+              readOnly: true
+            - name: relay-policy
+              mountPath: /var/lib/relay-policy/
+            - name: postfix-spool
+              mountPath: /var/spool/postfix/
+            - name: relay-logs
+              mountPath: /var/log/relay/
+          
+          livenessProbe:
+            tcpSocket:
+              port: 25
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9090
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 1Gi
+          
+          securityContext:
+            runAsUser: 0  # Postfix requires root
+            allowPrivilegeEscalation: true
+            capabilities:
+              add:
+                - NET_BIND_SERVICE
+                - SYS_CHROOT
+      
+      volumes:
+        - name: postfix-config
+          configMap:
+            name: postfix-config
+        - name: tls-certs
+          secret:
+            secretName: relay-tls-certs
+        - name: relay-policy
+          configMap:
+            name: relay-policy
+        - name: postfix-spool
+          emptyDir: {}
+        - name: relay-logs
+          emptyDir: {}
+
+---
+# Service: ClusterIP (for internal access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: cegp-smtp-relay
+  namespace: email-security
+  labels:
+    app: cegp-smtp-relay
+spec:
+  type: ClusterIP
+  selector:
+    app: cegp-smtp-relay
+  ports:
+    - name: smtp
+      port: 25
+      targetPort: 25
+      protocol: TCP
+    - name: smtp-submission
+      port: 587
+      targetPort: 587
+      protocol: TCP
+    - name: smtps
+      port: 465
+      targetPort: 465
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+
+---
+# HorizontalPodAutoscaler: Auto-scale based on metrics
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cegp-smtp-relay-hpa
+  namespace: email-security
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cegp-smtp-relay
+  
+  minReplicas: 3
+  maxReplicas: 20
+  
+  metrics:
+    # CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    
+    # Memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+  
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 15
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+      selectPolicy: Max
+
+---
+# PodDisruptionBudget: Ensure minimum availability during node maintenance
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cegp-smtp-relay-pdb
+  namespace: email-security
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: cegp-smtp-relay
+
+---
+# ServiceMonitor: For Prometheus scraping (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cegp-smtp-relay
+  namespace: email-security
+spec:
+  selector:
+    matchLabels:
+      app: cegp-smtp-relay
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
