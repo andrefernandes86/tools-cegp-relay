@@ -19,7 +19,7 @@ A Kubernetes-native SMTP relay that sits between your customer applications and 
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/tools-cegp-relay.git
+git clone https://github.com/andrefernandes86/tools-cegp-relay.git
 cd tools-cegp-relay
 
 # Deploy to Kubernetes
@@ -189,4 +189,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 **Status:** ✅ Production Ready  
 **Version:** 3.0  
-**Last Updated:** March 2025  
+**Last Updated:** March 2026
