@@ -29,7 +29,9 @@ cd tools-cegp-relay
 The installer will guide you through:
 - **Local or Remote deployment** - Deploy on current machine or remote Kubernetes cluster
 - **Scaling configuration** - Set minimum (2-20) and maximum (2-20) relay nodes
-- **CEGP gateway settings** - Configure destination gateway (default: relay.mx.trendmicro.com:25)
+- **CEGP gateway settings** - Configure destination next-hop (IP or FQDN)
+- **LoadBalancer setup** - Optional MetalLB install/configuration for local clusters
+- **Message storage path** - Host path for temporary message queue storage (default: `/mnt/nfs/messages`)
 - **Authorized domains** - Email domains allowed to relay through this service
 - **Authorized IP addresses** - IP ranges permitted to send emails (CIDR notation)
 - **Rate limiting** - Configure per-IP and per-recipient rate limits
@@ -93,16 +95,16 @@ The `install.sh` script provides a complete management interface:
 - Performance metrics
 
 ### 🧪 **Testing and Validation**
-- Automated connectivity tests
+- Throttled SMTP test sender from menu (custom source, destination, count)
 - SMTP protocol validation
-- Load testing capabilities
+- Connection info helper (LB + NodePort + node IPs)
 - Integration verification
 
 ### CEGP Console Setup
 After deployment, configure CEGP console:
 1. Add Domain: `your-domain.com`
 2. Type: **User-defined mail servers**
-3. Server: `<LoadBalancer-IP>:25` (shown after deployment)
+3. Server: `<LoadBalancer-IP>:25` (or node `IP:NodePort` if LB IP is pending)
 4. Preference: `10`
 5. Test Connection
 

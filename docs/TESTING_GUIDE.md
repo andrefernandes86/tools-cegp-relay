@@ -8,11 +8,10 @@ Before testing, ensure your CEGP SMTP relay is deployed and running:
 # Check if pods are running
 k0s kubectl get pods -n email-security
 
-# If pods are still pending, install local-path provisioner first:
+# If needed, ensure local-path provisioner exists:
 k0s kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.28/deploy/local-path-storage.yaml
-k0s kubectl delete pvc relay-queue-storage -n email-security
-k0s kubectl delete storageclass relay-fast-storage
-k0s kubectl apply -f kubernetes/kubernetes-deployment-simple.yaml
+# Deploy using installer-generated manifest:
+./install.sh
 ```
 
 ## Step 1: Basic Health Check
@@ -135,6 +134,20 @@ chmod +x smtp-test.sh
 # Run the test
 ./smtp-test.sh $RELAY_IP test@yourcompany.com recipient@yourcompany.com
 ```
+
+### 3.3 Installer Throttled Test (Recommended)
+Use the built-in menu option to avoid upstream rate limits:
+
+```bash
+./install.sh
+# Select option 11: Send throttled test messages
+```
+
+The menu prompts for:
+- source email
+- destination email
+- message count
+- delay between messages (default 2 seconds)
 
 ## Step 4: Load and Performance Tests
 

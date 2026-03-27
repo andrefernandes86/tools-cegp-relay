@@ -41,11 +41,24 @@ Configure auto-scaling parameters:
 ### 3. CEGP Gateway Configuration
 
 Set up the destination gateway:
-- **CEGP hostname**: Default `relay.mx.trendmicro.com`
+- **CEGP destination**: Next-hop IP or FQDN
 - **CEGP port**: Default `25`
 - **TLS settings**: Configurable
 
-### 4. Security Configuration
+### 4. Message Storage Location
+
+Configure where temporary queue files are stored:
+- **Default**: `/mnt/nfs/messages`
+- **Behavior**: Each pod uses its own subdirectory under this path (safe multi-pod operation)
+
+### 5. LoadBalancer IP Option (Local Clusters)
+
+Optionally enable MetalLB from the installer:
+- auto-installs MetalLB
+- configures an address pool (example: `192.168.40.240-192.168.40.250`)
+- allows `Service type: LoadBalancer` to get an external IP on bare-metal/local clusters
+
+### 6. Security Configuration
 
 #### Authorized Domains
 Specify which email domains can send through the relay:
@@ -63,7 +76,7 @@ Define IP ranges allowed to connect (CIDR notation):
 172.16.5.10/32
 ```
 
-### 5. Rate Limiting
+### 7. Rate Limiting
 
 Configure message throughput limits:
 - **Per IP per minute**: Default 2000 messages
@@ -106,7 +119,7 @@ The installer will display the external IP address for your SMTP relay.
 ### 4. Test the Deployment
 ```bash
 ./install.sh
-# Select option 5: Run tests
+# Select option 11: Send throttled test messages
 ```
 
 ## Management Features
@@ -141,14 +154,26 @@ Allows you to:
 ### Log Monitoring
 ```bash
 ./install.sh
-# Select option 6: View logs
+# Select option 5: View logs
 ```
 
 ### Manual Scaling
 ```bash
 ./install.sh
-# Select option 8: Scale deployment
+# Select option 7: Scale deployment
 ```
+
+### Connection Information
+```bash
+./install.sh
+# Select option 12: Show connection information
+```
+
+Shows:
+- LoadBalancer IP/hostname with ports (if available)
+- NodePort values
+- All node internal IPs + direct `IP:NodePort` endpoints
+- Configured allowed source networks and sender domains
 
 ## Configuration Files
 
@@ -162,9 +187,9 @@ The installer creates and manages:
 ### Common Issues
 
 #### 1. Pods Stuck in Pending
-- Check if local-path provisioner is installed
-- Verify node resources
-- Check PVC binding status
+- Check node resources and events
+- Check image pull and probe failures
+- Verify queue storage path exists/is writable on nodes
 
 #### 2. ImagePullBackOff
 - Ensure internet connectivity
@@ -209,10 +234,8 @@ kubectl apply -f kubernetes/kubernetes-deployment-persistent.yaml
 ```
 
 ### Persistent Storage
-The deployment automatically configures persistent storage for:
-- Message queues (`/var/spool/postfix/`)
-- Configuration files
-- Logs (optional)
+The deployment stores queue data in the configured host path (default `/mnt/nfs/messages`), with one subdirectory per pod.
+This enables multi-pod load balancing without shared queue file collisions.
 
 ### Network Policies
 For enhanced security, apply network policies:
@@ -225,13 +248,13 @@ kubectl apply -f kubernetes/network-policies.yaml
 ### Configuration Backup
 ```bash
 ./install.sh
-# Select option 9: Backup configuration
+# Select option 8: Backup configuration
 ```
 
 ### Configuration Restore
 ```bash
 ./install.sh
-# Select option 10: Restore configuration
+# Select option 9: Restore configuration
 ```
 
 ### Message Queue Backup
@@ -242,7 +265,7 @@ Message queues are automatically persisted in PersistentVolumes.
 To completely remove the deployment:
 ```bash
 ./install.sh
-# Select option 11: Uninstall
+# Select option 10: Uninstall
 ```
 
 This will:
