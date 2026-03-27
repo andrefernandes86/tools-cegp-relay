@@ -733,9 +733,21 @@ show_connection_info() {
     print_status "Cluster nodes (internal IPs):"
     execute_kubectl "k0s kubectl get nodes -o wide"
 
-    # Print practical direct-connect examples using first node IP.
-    local first_node_ip
-    first_node_ip=$(execute_kubectl "k0s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}' 2>/dev/null" || echo "")
+    echo
+    print_status "Direct node endpoints (use from inside your network):"
+    local node_ips first_node_ip
+    node_ips=$(execute_kubectl "k0s kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type==\"InternalIP\")].address}{\"\\n\"}{end}' 2>/dev/null" || echo "")
+    first_node_ip=""
+    while IFS= read -r node_ip; do
+        [[ -z "$node_ip" ]] && continue
+        [[ -z "$first_node_ip" ]] && first_node_ip="$node_ip"
+        echo "- Node $node_ip"
+        [[ -n "$smtp_np" ]] && echo "  SMTP:       ${node_ip}:${smtp_np}"
+        [[ -n "$submission_np" ]] && echo "  Submission: ${node_ip}:${submission_np}"
+        [[ -n "$smtps_np" ]] && echo "  SMTPS:      ${node_ip}:${smtps_np}"
+        [[ -n "$metrics_np" ]] && echo "  Metrics:    ${node_ip}:${metrics_np}"
+    done <<< "$node_ips"
+
     if [[ -n "$first_node_ip" && -n "$smtp_np" ]]; then
         echo
         print_status "Direct connection examples:"
@@ -743,6 +755,20 @@ show_connection_info() {
         echo "- Test banner: printf \"EHLO test.local\\r\\nQUIT\\r\\n\" | nc ${first_node_ip} ${smtp_np}"
         echo "- swaks: swaks --server ${first_node_ip}:${smtp_np} --from you@domain.com --to user@example.com --header \"Subject: test\" --body \"hello\""
     fi
+
+    echo
+    print_status "Access policy from setup:"
+    if [[ -n "${AUTHORIZED_IPS:-}" ]]; then
+        echo "- Allowed source networks: ${AUTHORIZED_IPS}"
+    else
+        echo "- Allowed source networks: ALL (no explicit restriction configured)"
+    fi
+    if [[ -n "${AUTHORIZED_DOMAINS:-}" ]]; then
+        echo "- Allowed sender domains: ${AUTHORIZED_DOMAINS}"
+    else
+        echo "- Allowed sender domains: ALL (no explicit restriction configured)"
+    fi
+    print_warning "Connectivity still depends on network/firewall rules between client machines and node IP:NodePort."
 }
 
 # Function to monitor real-time metrics
