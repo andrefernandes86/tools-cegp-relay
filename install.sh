@@ -99,6 +99,7 @@ DEPLOYMENT_TYPE="$DEPLOYMENT_TYPE"
 CLUSTER_TYPE="$CLUSTER_TYPE"
 MIN_REPLICAS="$MIN_REPLICAS"
 MAX_REPLICAS="$MAX_REPLICAS"
+MESSAGE_STORAGE_PATH="$MESSAGE_STORAGE_PATH"
 REMOTE_SERVER="$REMOTE_SERVER"
 REMOTE_USER="$REMOTE_USER"
 REMOTE_PASSWORD="$REMOTE_PASSWORD"
@@ -117,6 +118,8 @@ EOF
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         source "$CONFIG_FILE"
+        # Backward compatibility for older config files.
+        MESSAGE_STORAGE_PATH=${MESSAGE_STORAGE_PATH:-/mnt/nfs/messages}
         return 0
     fi
     return 1
@@ -230,6 +233,16 @@ get_remote_config() {
     CLUSTER_TYPE="remote"
 }
 
+# Function to get message storage path
+get_message_storage_path() {
+    print_header "MESSAGE STORAGE LOCATION"
+    print_status "Temporary messages are stored while being processed."
+    print_status "Provide host path for queue storage (local node filesystem or mounted NFS path)."
+    read -p "Host path for temporary messages (default: /mnt/nfs/messages): " storage_path
+    MESSAGE_STORAGE_PATH=${storage_path:-/mnt/nfs/messages}
+    print_success "Message storage path: $MESSAGE_STORAGE_PATH"
+}
+
 # Current manifest uses a single PVC with ReadWriteOnce (RWO).
 # That allows only one active writer pod for the queue volume.
 enforce_storage_scaling_constraints() {
@@ -247,7 +260,7 @@ get_cegp_config() {
     print_header "CEGP CLOUD EMAIL GATEWAY CONFIGURATION"
     
     print_status "Select CEGP Gateway configuration:"
-    echo "1) Custom Trend Micro tenant (e.g., company-onmicrosoft-com.relay.tmes.trendmicro.com)"
+    echo "1) Trend Micro tenant endpoint"
     echo "2) Custom hostname"
     
     read -p "Enter your choice (1-2, default: 1): " cegp_choice
@@ -255,10 +268,13 @@ get_cegp_config() {
     
     case $cegp_choice in
         1)
-            read -p "Enter your tenant prefix (e.g., 'company-onmicrosoft-com'): " tenant_prefix
+            print_status "Enter either:"
+            print_status "- tenant prefix (example: company-onmicrosoft-com)"
+            print_status "- OR full host (example: company-onmicrosoft-com.in.tmes.trendmicro.com)"
+            read -p "Tenant prefix or full host: " tenant_prefix
             if [[ -n "$tenant_prefix" ]]; then
-                # Check if user already provided full hostname
-                if [[ "$tenant_prefix" == *.relay.tmes.trendmicro.com ]]; then
+                # If user entered a full hostname (contains dots), keep as-is.
+                if [[ "$tenant_prefix" == *.* ]]; then
                     CEGP_HOST="$tenant_prefix"
                 else
                     CEGP_HOST="${tenant_prefix}.relay.tmes.trendmicro.com"
@@ -527,6 +543,12 @@ update_deployment_files() {
         /relay\.mx\.trendmicro\.com/ { gsub(/relay\.mx\.trendmicro\.com/, host) }
         { print }
     ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
+
+    # Update host storage path for queue data
+    awk -v path="$MESSAGE_STORAGE_PATH" '
+        /path: \/mnt\/nfs\/messages/ { gsub(/path: \/mnt\/nfs\/messages/, "path: " path) }
+        { print }
+    ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     
     # Update domains and IPs in environment variables
     awk -v domains="$AUTHORIZED_DOMAINS" -v ips="$AUTHORIZED_IPS" '
@@ -748,6 +770,7 @@ manage_configuration() {
             echo "Current Configuration:"
             echo "- Deployment: $DEPLOYMENT_TYPE ($CLUSTER_TYPE)"
             echo "- CEGP Host: $CEGP_HOST:$CEGP_PORT"
+            echo "- Message storage path: $MESSAGE_STORAGE_PATH"
             echo "- Replicas: $MIN_REPLICAS - $MAX_REPLICAS"
             echo "- Domains: $AUTHORIZED_DOMAINS"
             echo "- IPs: $AUTHORIZED_IPS"
@@ -1080,6 +1103,7 @@ show_main_menu() {
                 create_config_dir
                 get_deployment_type
                 get_cegp_config
+                get_message_storage_path
                 get_authorized_domains
                 get_authorized_ips
                 get_rate_limits

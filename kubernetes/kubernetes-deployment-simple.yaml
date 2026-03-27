@@ -333,10 +333,11 @@ spec:
                 - SYS_CHROOT
       
       volumes:
-        # PERSISTENT VOLUME CLAIM for message queue
+        # Host path for message queue storage (can be local disk or mounted NFS path)
         - name: postfix-queue
-          persistentVolumeClaim:
-            claimName: relay-queue-storage
+          hostPath:
+            path: /mnt/nfs/messages
+            type: DirectoryOrCreate
         
         # Minimal volumes for boky/postfix
         
