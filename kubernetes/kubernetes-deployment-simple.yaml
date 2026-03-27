@@ -21,6 +21,8 @@ reclaimPolicy: Retain
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer         # Bind to node after pod created
 
+---
+
 # ConfigMap: Postfix Configuration
 apiVersion: v1
 kind: ConfigMap
