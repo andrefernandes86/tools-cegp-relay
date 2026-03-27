@@ -461,9 +461,9 @@ deploy_application() {
     if [[ "$DEPLOYMENT_TYPE" == "remote" ]]; then
         # Copy deployment files to remote server
         scp -r kubernetes/ "$REMOTE_USER@$REMOTE_SERVER:~/cegp-relay-deploy/"
-        execute_kubectl "k0s kubectl apply -f ~/cegp-relay-deploy/kubernetes-deployment-simple.yaml"
+        execute_kubectl "k0s kubectl apply -f ~/cegp-relay-deploy/kubernetes-deployment-configured.yaml"
     else
-        execute_kubectl "k0s kubectl apply -f kubernetes/kubernetes-deployment-simple.yaml"
+        execute_kubectl "k0s kubectl apply -f kubernetes/kubernetes-deployment-configured.yaml"
     fi
     
     print_status "Waiting for deployment to be ready..."
@@ -471,6 +471,7 @@ deploy_application() {
     
     # Check deployment status
     if check_deployment_status; then
+        cleanup_stale_pods
         print_success "CEGP SMTP Relay deployed successfully!"
         show_deployment_info
     else
@@ -594,18 +595,33 @@ check_deployment_status() {
     local attempt=0
     
     while [[ $attempt -lt $max_attempts ]]; do
-        local ready_pods=$(execute_kubectl "k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay --no-headers 2>/dev/null | grep Running | wc -l" || echo "0")
-        
-        if [[ $ready_pods -ge $MIN_REPLICAS ]]; then
-            return 0
+        # Primary signal: deployment rollout is complete
+        if execute_kubectl "k0s kubectl rollout status deployment/cegp-smtp-relay -n $NAMESPACE --timeout=5s >/dev/null 2>&1"; then
+            # Secondary signal: at least MIN_REPLICAS are fully ready (1/1)
+            local ready_pods
+            ready_pods=$(execute_kubectl "k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay --no-headers 2>/dev/null | awk '\$2 ~ /^1\\/1$/ && \$3 == \"Running\" {count++} END {print count+0}'" || echo "0")
+            if [[ $ready_pods -ge $MIN_REPLICAS ]]; then
+                return 0
+            fi
         fi
-        
-        print_status "Waiting for pods to be ready... ($((attempt + 1))/$max_attempts)"
+
+        print_status "Waiting for rollout and ready pods... ($((attempt + 1))/$max_attempts)"
         sleep 10
         ((attempt++))
     done
     
     return 1
+}
+
+# Function to clean up stale pods from old ReplicaSets
+cleanup_stale_pods() {
+    print_status "Cleaning up stale pods from old ReplicaSets..."
+
+    # Scale old ReplicaSets to zero, keep only newest one
+    execute_kubectl "k0s kubectl get rs -n $NAMESPACE -l app=cegp-smtp-relay --sort-by=.metadata.creationTimestamp -o name | head -n -1 | xargs -r -I{} k0s kubectl scale -n $NAMESPACE {} --replicas=0" || true
+
+    # Delete failed old pods if any remain
+    execute_kubectl "k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay --no-headers 2>/dev/null | awk '\$3 ~ /CrashLoopBackOff|Error|ImagePullBackOff|Failed/ {print \$1}' | xargs -r -I{} k0s kubectl delete pod -n $NAMESPACE {} --ignore-not-found=true" || true
 }
 
 # Function to show deployment information
