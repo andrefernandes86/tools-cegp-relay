@@ -1243,7 +1243,7 @@ send_throttled_test_messages() {
         subject="CEGP relay test ${ts} #${i}"
         body="hello world (message ${i}/${message_count})"
 
-        if execute_kubectl "k0s kubectl exec -n $NAMESPACE $pod_name -- sh -lc \"printf 'From: ${from_email}\nTo: ${to_email}\nSubject: ${subject}\n\n${body}\n' | sendmail -t\" >/dev/null 2>&1"; then
+        if execute_kubectl "k0s kubectl exec -n $NAMESPACE $pod_name -- sh -lc \"printf 'From: ${from_email}\nTo: ${to_email}\nSubject: ${subject}\n\n${body}\n' | sendmail -t -f '${from_email}'\" >/dev/null 2>&1"; then
             sent_count=$((sent_count + 1))
             if (( sent_count == 1 || sent_count % 10 == 0 || sent_count == message_count )); then
                 print_status "Sent ${sent_count}/${message_count}"
