@@ -548,17 +548,28 @@ check_deployment_status() {
     local attempt=0
     
     while [[ $attempt -lt $max_attempts ]]; do
-        # Primary signal: deployment rollout is complete
-        if execute_kubectl "k0s kubectl rollout status deployment/cegp-smtp-relay -n $NAMESPACE --timeout=5s >/dev/null 2>&1"; then
-            # Secondary signal: at least MIN_REPLICAS are fully ready (1/1)
-            local ready_pods
-            ready_pods=$(execute_kubectl "k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay --no-headers 2>/dev/null | awk '\$2 ~ /^1\\/1$/ && \$3 == \"Running\" {count++} END {print count+0}'" || echo "0")
-            if [[ $ready_pods -ge $MIN_REPLICAS ]]; then
-                return 0
-            fi
+        # Read current deployment and pod health.
+        local ready_pods available_replicas failed_pods
+        ready_pods=$(execute_kubectl "k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay --no-headers 2>/dev/null | awk '\$2 ~ /^1\\/1$/ && \$3 == \"Running\" {count++} END {print count+0}'" || echo "0")
+        available_replicas=$(execute_kubectl "k0s kubectl get deploy cegp-smtp-relay -n $NAMESPACE -o jsonpath='{.status.availableReplicas}' 2>/dev/null" || echo "")
+        failed_pods=$(execute_kubectl "k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay --no-headers 2>/dev/null | awk '\$3 ~ /CrashLoopBackOff|Error|ImagePullBackOff|CreateContainerError|RunContainerError|Failed/ {count++} END {print count+0}'" || echo "0")
+
+        # Normalize empty availableReplicas to 0.
+        if [[ -z "$available_replicas" ]]; then
+            available_replicas=0
         fi
 
-        print_status "Waiting for rollout and ready pods... ($((attempt + 1))/$max_attempts)"
+        # Success condition: real service health achieved, even if rollout metadata lags.
+        if [[ $ready_pods -ge $MIN_REPLICAS && $available_replicas -ge $MIN_REPLICAS ]]; then
+            return 0
+        fi
+
+        # Self-heal stale failed pods during wait to avoid indefinite convergence stalls.
+        if [[ $failed_pods -gt 0 ]]; then
+            cleanup_stale_pods >/dev/null 2>&1 || true
+        fi
+
+        print_status "Waiting for rollout and ready pods... ($((attempt + 1))/$max_attempts) [ready=$ready_pods available=$available_replicas failed=$failed_pods target=$MIN_REPLICAS]"
         sleep 10
         ((attempt++))
     done
