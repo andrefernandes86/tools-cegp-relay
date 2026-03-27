@@ -231,7 +231,7 @@ spec:
       
       containers:
         - name: relay
-          image: postfix:latest  # Use standard postfix image for now
+          image: boky/postfix:latest  # Popular Postfix container image
           imagePullPolicy: IfNotPresent
           
           ports:
