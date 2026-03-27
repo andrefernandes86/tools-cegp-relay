@@ -21,23 +21,6 @@ reclaimPolicy: Retain
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer         # Bind to node after pod created
 
----
-# PersistentVolumeClaim: Storage for message queue
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: relay-queue-storage
-  namespace: email-security
-spec:
-  accessModes:
-    - ReadWriteOnce                             # One pod at a time
-  storageClassName: relay-fast-storage
-  resources:
-    requests:
-      storage: 100Gi                            # 100GB for queue (adjust as needed)
-                                                 # ~50-100k messages depending on size
-
----
 # ConfigMap: Postfix Configuration
 apiVersion: v1
 kind: ConfigMap
@@ -252,6 +235,10 @@ spec:
           
           env:
             # Essential boky/postfix configuration
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: HOSTNAME
               value: "cegp-relay"
             - name: RELAYHOST
@@ -301,6 +288,7 @@ spec:
             # PERSISTENT STORAGE for message queue
             - name: postfix-queue
               mountPath: /var/spool/postfix/
+              subPathExpr: $(POD_NAME)
             
             # Only essential mounts for boky/postfix
             
@@ -343,7 +331,8 @@ spec:
                 - SYS_CHROOT
       
       volumes:
-        # Host path for message queue storage (can be local disk or mounted NFS path)
+        # Shared host path base for message queue storage.
+        # Each pod uses its own subdirectory via subPathExpr ($(POD_NAME)).
         - name: postfix-queue
           hostPath:
             path: /mnt/nfs/messages

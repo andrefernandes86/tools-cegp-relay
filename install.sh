@@ -256,16 +256,11 @@ get_message_storage_path() {
     print_success "Message storage path: $MESSAGE_STORAGE_PATH"
 }
 
-# Current manifest uses a single PVC with ReadWriteOnce (RWO).
-# That allows only one active writer pod for the queue volume.
 enforce_storage_scaling_constraints() {
-    if [[ "${MIN_REPLICAS:-1}" -gt 1 || "${MAX_REPLICAS:-1}" -gt 1 ]]; then
-        print_warning "Current storage mode is single-queue PVC (ReadWriteOnce)."
-        print_warning "Scaling above 1 replica is not supported with this manifest."
-        print_warning "For now, forcing replicas to 1/1 to ensure reliable deployment."
-        MIN_REPLICAS=1
-        MAX_REPLICAS=1
-    fi
+    # Multi-pod mode is supported: each pod writes to its own subdirectory under
+    # MESSAGE_STORAGE_PATH (configured via subPathExpr: $(POD_NAME)).
+    # Keep user-specified MIN/MAX as-is.
+    return 0
 }
 
 # Function to get CEGP configuration
