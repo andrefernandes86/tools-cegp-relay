@@ -120,6 +120,7 @@ load_config() {
         source "$CONFIG_FILE"
         # Backward compatibility for older config files.
         MESSAGE_STORAGE_PATH=${MESSAGE_STORAGE_PATH:-/mnt/nfs/messages}
+        NAMESPACE=${NAMESPACE:-email-security}
         return 0
     fi
     return 1
