@@ -235,38 +235,42 @@ get_cegp_config() {
     print_header "CEGP CLOUD EMAIL GATEWAY CONFIGURATION"
     
     print_status "Select CEGP Gateway configuration:"
-    echo "1) Trend Micro Cloud (default: relay.mx.trendmicro.com)"
-    echo "2) Custom Trend Micro tenant (e.g., company-onmicrosoft-com.relay.tmes.trendmicro.com)"
-    echo "3) Custom hostname"
+    echo "1) Custom Trend Micro tenant (e.g., company-onmicrosoft-com.relay.tmes.trendmicro.com)"
+    echo "2) Custom hostname"
     
-    read -p "Enter your choice (1-3, default: 1): " cegp_choice
+    read -p "Enter your choice (1-2, default: 1): " cegp_choice
     cegp_choice=${cegp_choice:-1}
     
     case $cegp_choice in
         1)
-            CEGP_HOST="relay.mx.trendmicro.com"
-            ;;
-        2)
             read -p "Enter your tenant prefix (e.g., 'company-onmicrosoft-com'): " tenant_prefix
             if [[ -n "$tenant_prefix" ]]; then
-                CEGP_HOST="${tenant_prefix}.relay.tmes.trendmicro.com"
+                # Check if user already provided full hostname
+                if [[ "$tenant_prefix" == *.relay.tmes.trendmicro.com ]]; then
+                    CEGP_HOST="$tenant_prefix"
+                else
+                    CEGP_HOST="${tenant_prefix}.relay.tmes.trendmicro.com"
+                fi
             else
-                print_warning "No tenant prefix provided, using default"
-                CEGP_HOST="relay.mx.trendmicro.com"
+                print_error "Tenant prefix is required"
+                get_cegp_config
+                return
             fi
             ;;
-        3)
+        2)
             read -p "Enter custom CEGP hostname: " custom_host
             if [[ -n "$custom_host" ]]; then
                 CEGP_HOST="$custom_host"
             else
-                print_warning "No hostname provided, using default"
-                CEGP_HOST="relay.mx.trendmicro.com"
+                print_error "Custom hostname is required"
+                get_cegp_config
+                return
             fi
             ;;
         *)
-            print_warning "Invalid choice, using default"
-            CEGP_HOST="relay.mx.trendmicro.com"
+            print_warning "Invalid choice, using tenant configuration"
+            get_cegp_config
+            return
             ;;
     esac
     
@@ -288,10 +292,9 @@ get_authorized_domains() {
     print_status "Configure email domains that are allowed to send through this relay"
     
     echo "1) Add domains manually"
-    echo "2) Use common business domains (gmail.com, outlook.com, company.local)"
-    echo "3) Allow all domains (not recommended for production)"
+    echo "2) Allow all domains (not recommended for production)"
     
-    read -p "Enter your choice (1-3, default: 1): " domain_choice
+    read -p "Enter your choice (1-2, default: 1): " domain_choice
     domain_choice=${domain_choice:-1}
     
     case $domain_choice in
@@ -317,16 +320,6 @@ get_authorized_domains() {
             done
             ;;
         2)
-            print_status "Using common business domains..."
-            AUTHORIZED_DOMAINS="gmail.com,outlook.com,hotmail.com,company.local,corp.local"
-            print_success "Added domains: $AUTHORIZED_DOMAINS"
-            read -p "Add additional domain (or press Enter to continue): " additional_domain
-            if [[ -n "$additional_domain" ]] && validate_domain "$additional_domain"; then
-                AUTHORIZED_DOMAINS="$AUTHORIZED_DOMAINS,$additional_domain"
-                print_success "Added additional domain: $additional_domain"
-            fi
-            ;;
-        3)
             print_warning "Allowing all domains (not recommended for production)"
             AUTHORIZED_DOMAINS=""
             ;;
@@ -509,16 +502,28 @@ update_deployment_files() {
         { print }
     ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     
-    # Update rate limits and domains/IPs in environment variables
-    awk -v rate_ip="$RATE_LIMIT_IP_PER_MIN" -v rate_rcpt="$RATE_LIMIT_RCPT_PER_MIN" -v domains="$AUTHORIZED_DOMAINS" -v ips="$AUTHORIZED_IPS" '
-        /RATE_LIMIT_IP_PER_MIN:.*value:/ { gsub(/value: "[^"]*"/, "value: \"" rate_ip "\"") }
-        /RATE_LIMIT_RCPT_PER_MIN:.*value:/ { gsub(/value: "[^"]*"/, "value: \"" rate_rcpt "\"") }
-        /ALLOWED_SENDER_DOMAINS/ { gsub(/value: "[^"]*"/, "value: \"" domains "\"") }
-        /MYNETWORKS/ && ips != "" { 
-            # Add authorized IPs to MYNETWORKS
-            gsub(/value: "([^"]*)"/, "value: \"\\1 " ips "\"")
+    # Update domains and IPs in environment variables
+    awk -v domains="$AUTHORIZED_DOMAINS" -v ips="$AUTHORIZED_IPS" '
+        /ALLOWED_SENDER_DOMAINS/ { 
+            if (domains != "") {
+                gsub(/value: "[^"]*"/, "value: \"" domains "\"") 
+            }
         }
-        /POSTFIX_relay_domains/ { gsub(/value: "[^"]*"/, "value: \"" domains "\"") }
+        /POSTFIX_relay_domains/ { 
+            if (domains != "") {
+                gsub(/value: "[^"]*"/, "value: \"" domains "\"") 
+            }
+        }
+        /MYNETWORKS/ { 
+            base_networks = "127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+            if (ips != "") {
+                # Replace commas with spaces in IP list
+                gsub(/,/, " ", ips)
+                gsub(/value: "[^"]*"/, "value: \"" base_networks " " ips "\"")
+            } else {
+                gsub(/value: "[^"]*"/, "value: \"" base_networks "\"")
+            }
+        }
         { print }
     ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     
