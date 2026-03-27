@@ -298,27 +298,23 @@ spec:
             - name: relay-logs
               mountPath: /var/log/relay/
           
-          # Lifecycle hooks for graceful shutdown
-          lifecycle:
-            preStop:
-              exec:
-                command: ["/bin/sh", "-c", "sleep 5 && postfix stop"]
-          
-          livenessProbe:
+          # Startup probe: allow postfix/supervisor enough time to settle.
+          startupProbe:
+            tcpSocket:
+              port: 25
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+
+          # Readiness only; avoid aggressive restarts from transient startup churn.
+          readinessProbe:
             tcpSocket:
               port: 25
             initialDelaySeconds: 30
             periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-          
-          readinessProbe:
-            tcpSocket:
-              port: 25
-            initialDelaySeconds: 15
-            periodSeconds: 5
             timeoutSeconds: 3
-            failureThreshold: 2
+            failureThreshold: 6
           
           resources:
             requests:

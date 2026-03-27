@@ -473,6 +473,9 @@ deploy_application() {
         execute_kubectl "k0s kubectl apply -f kubernetes/kubernetes-deployment-configured.yaml"
     fi
     
+    # Immediately clean stale pods/ReplicaSets from previous revisions to avoid false failures.
+    cleanup_stale_pods
+
     print_status "Waiting for deployment to be ready..."
     sleep 10
     
@@ -605,12 +608,15 @@ show_troubleshooting_info() {
     
     print_status "Pod Status:"
     execute_kubectl "k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay"
+
+    print_status "ReplicaSets:"
+    execute_kubectl "k0s kubectl get rs -n $NAMESPACE -l app=cegp-smtp-relay --sort-by=.metadata.creationTimestamp"
     
     print_status "Recent Events:"
     execute_kubectl "k0s kubectl get events -n $NAMESPACE --sort-by='.lastTimestamp' | tail -10"
     
-    print_status "Pod Logs (last 20 lines):"
-    execute_kubectl "k0s kubectl logs -l app=cegp-smtp-relay -n $NAMESPACE --tail=20"
+    print_status "Newest Pod Logs (last 40 lines):"
+    execute_kubectl "k0s kubectl logs -n $NAMESPACE \$(k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}') --tail=40"
 }
 
 # Function to show status
