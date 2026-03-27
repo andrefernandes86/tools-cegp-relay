@@ -686,6 +686,65 @@ show_status() {
     execute_kubectl "k0s kubectl logs -l app=cegp-smtp-relay -n $NAMESPACE --tail=10 --since=5m"
 }
 
+# Function to show connection details (LoadBalancer + direct node access)
+show_connection_info() {
+    print_header "CONNECTION INFORMATION"
+
+    if ! load_config; then
+        print_error "No configuration found. Please run installation first."
+        return 1
+    fi
+
+    print_status "Service endpoints:"
+    execute_kubectl "k0s kubectl get svc cegp-smtp-relay -n $NAMESPACE -o wide"
+
+    local lb_ip lb_host smtp_np submission_np smtps_np metrics_np
+    lb_ip=$(execute_kubectl "k0s kubectl get svc cegp-smtp-relay -n $NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null" || echo "")
+    lb_host=$(execute_kubectl "k0s kubectl get svc cegp-smtp-relay -n $NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null" || echo "")
+    smtp_np=$(execute_kubectl "k0s kubectl get svc cegp-smtp-relay -n $NAMESPACE -o jsonpath='{.spec.ports[?(@.name==\"smtp\")].nodePort}' 2>/dev/null" || echo "")
+    submission_np=$(execute_kubectl "k0s kubectl get svc cegp-smtp-relay -n $NAMESPACE -o jsonpath='{.spec.ports[?(@.name==\"smtp-submission\")].nodePort}' 2>/dev/null" || echo "")
+    smtps_np=$(execute_kubectl "k0s kubectl get svc cegp-smtp-relay -n $NAMESPACE -o jsonpath='{.spec.ports[?(@.name==\"smtps\")].nodePort}' 2>/dev/null" || echo "")
+    metrics_np=$(execute_kubectl "k0s kubectl get svc cegp-smtp-relay -n $NAMESPACE -o jsonpath='{.spec.ports[?(@.name==\"metrics\")].nodePort}' 2>/dev/null" || echo "")
+
+    echo
+    print_status "LoadBalancer access:"
+    if [[ -n "$lb_ip" && "$lb_ip" != "null" ]]; then
+        echo "- IP: $lb_ip"
+        echo "- SMTP: $lb_ip:25"
+        echo "- Submission: $lb_ip:587"
+        echo "- SMTPS: $lb_ip:465"
+    elif [[ -n "$lb_host" && "$lb_host" != "null" ]]; then
+        echo "- Hostname: $lb_host"
+        echo "- SMTP: $lb_host:25"
+        echo "- Submission: $lb_host:587"
+        echo "- SMTPS: $lb_host:465"
+    else
+        print_warning "LoadBalancer address is pending/unavailable."
+    fi
+
+    echo
+    print_status "Direct node access (NodePort):"
+    echo "- SMTP NodePort: ${smtp_np:-N/A}"
+    echo "- Submission NodePort: ${submission_np:-N/A}"
+    echo "- SMTPS NodePort: ${smtps_np:-N/A}"
+    echo "- Metrics NodePort: ${metrics_np:-N/A}"
+
+    echo
+    print_status "Cluster nodes (internal IPs):"
+    execute_kubectl "k0s kubectl get nodes -o wide"
+
+    # Print practical direct-connect examples using first node IP.
+    local first_node_ip
+    first_node_ip=$(execute_kubectl "k0s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}' 2>/dev/null" || echo "")
+    if [[ -n "$first_node_ip" && -n "$smtp_np" ]]; then
+        echo
+        print_status "Direct connection examples:"
+        echo "- SMTP (NodePort): ${first_node_ip}:${smtp_np}"
+        echo "- Test banner: printf \"EHLO test.local\\r\\nQUIT\\r\\n\" | nc ${first_node_ip} ${smtp_np}"
+        echo "- swaks: swaks --server ${first_node_ip}:${smtp_np} --from you@domain.com --to user@example.com --header \"Subject: test\" --body \"hello\""
+    fi
+}
+
 # Function to monitor real-time metrics
 monitor_realtime() {
     print_header "REAL-TIME MONITORING"
@@ -1158,9 +1217,10 @@ show_main_menu() {
         echo "10) Restore configuration"
         echo "11) Uninstall"
         echo "12) Send throttled test messages"
-        echo "13) Exit"
+        echo "13) Show connection information"
+        echo "14) Exit"
         
-        read -p "Enter your choice (1-13): " choice
+        read -p "Enter your choice (1-14): " choice
         
         case $choice in
             1)
@@ -1257,11 +1317,15 @@ show_main_menu() {
                 read -p "Press Enter to continue..."
                 ;;
             13)
+                show_connection_info
+                read -p "Press Enter to continue..."
+                ;;
+            14)
                 print_status "Goodbye!"
                 exit 0
                 ;;
             *)
-                print_error "Invalid choice. Please select 1-13."
+                print_error "Invalid choice. Please select 1-14."
                 sleep 2
                 ;;
         esac
