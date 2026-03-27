@@ -230,6 +230,18 @@ get_remote_config() {
     CLUSTER_TYPE="remote"
 }
 
+# Current manifest uses a single PVC with ReadWriteOnce (RWO).
+# That allows only one active writer pod for the queue volume.
+enforce_storage_scaling_constraints() {
+    if [[ "${MIN_REPLICAS:-1}" -gt 1 || "${MAX_REPLICAS:-1}" -gt 1 ]]; then
+        print_warning "Current storage mode is single-queue PVC (ReadWriteOnce)."
+        print_warning "Scaling above 1 replica is not supported with this manifest."
+        print_warning "For now, forcing replicas to 1/1 to ensure reliable deployment."
+        MIN_REPLICAS=1
+        MAX_REPLICAS=1
+    fi
+}
+
 # Function to get CEGP configuration
 get_cegp_config() {
     print_header "CEGP CLOUD EMAIL GATEWAY CONFIGURATION"
@@ -450,6 +462,9 @@ deploy_application() {
     
     # Create namespace
     NAMESPACE="email-security"
+
+    # Prevent impossible scale targets for current PVC model.
+    enforce_storage_scaling_constraints
     
     # Update deployment files with configuration
     update_deployment_files
@@ -920,6 +935,8 @@ update_scaling_settings() {
             print_error "Invalid maximum replicas (must be $MIN_REPLICAS-20)"
         fi
     fi
+
+    enforce_storage_scaling_constraints
     
     print_success "Scaling settings updated"
 }
@@ -1066,6 +1083,7 @@ show_main_menu() {
                 get_authorized_domains
                 get_authorized_ips
                 get_rate_limits
+                enforce_storage_scaling_constraints
                 save_config
                 if [[ "$DEPLOYMENT_TYPE" == "remote" ]]; then
                     setup_remote_kubectl
@@ -1109,6 +1127,7 @@ show_main_menu() {
             8)
                 if load_config; then
                     read -p "Enter desired number of replicas ($MIN_REPLICAS-$MAX_REPLICAS): " replicas
+                    enforce_storage_scaling_constraints
                     if [[ $replicas -ge $MIN_REPLICAS && $replicas -le $MAX_REPLICAS ]]; then
                         execute_kubectl "k0s kubectl scale deployment cegp-smtp-relay --replicas=$replicas -n $NAMESPACE"
                         print_success "Deployment scaled to $replicas replicas"
