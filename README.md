@@ -22,14 +22,18 @@ A Kubernetes-native SMTP relay that sits between your customer applications and 
 git clone https://github.com/andrefernandes86/tools-cegp-relay.git
 cd tools-cegp-relay
 
-# Deploy to Kubernetes
-kubectl apply -f kubernetes/kubernetes-deployment-persistent.yaml
-
-# Verify
-kubectl get pods -n email-security
-kubectl get pvc -n email-security
-kubectl get svc -n email-security
+# Run the interactive installer
+./install.sh
 ```
+
+The installer will guide you through:
+- **Local or Remote deployment** - Deploy on current machine or remote Kubernetes cluster
+- **Scaling configuration** - Set minimum (2-20) and maximum (2-20) relay nodes
+- **CEGP gateway settings** - Configure destination gateway (default: relay.mx.trendmicro.com:25)
+- **Authorized domains** - Email domains allowed to relay through this service
+- **Authorized IP addresses** - IP ranges permitted to send emails (CIDR notation)
+- **Rate limiting** - Configure per-IP and per-recipient rate limits
+- **Automatic deployment** - Handles all Kubernetes resources and configuration
 
 ## 📚 Documentation
 
@@ -65,24 +69,40 @@ Final Destination (Gmail, Outlook, etc.)
 RESULT: ✅ ZERO MESSAGE LOSS
 ```
 
-## 🔧 Configuration
+## 🔧 Management Features
 
-### Add relay domains
-```bash
-kubectl patch configmap relay-policy -n email-security \
-  --type merge -p '{"data":{"domains.conf":"company.com\nsubsidiary.org"}}'
-```
+The `install.sh` script provides a complete management interface:
 
-### Add CEGP IP ranges
-```bash
-kubectl patch configmap relay-policy -n email-security \
-  --type merge -p '{"data":{"permit-ips.conf":"150.70.149.0/27\n150.70.149.32/27\n150.70.236.0/24"}}'
-```
+### 📊 **Real-time Monitoring**
+- Live message statistics (received vs delivered per second)
+- Active node count and health status
+- Resource usage monitoring
+- Auto-scaling status
 
-### CEGP Console
-1. Add Domain: `company.com`
+### ⚙️ **Configuration Management**
+- Add/remove authorized domains
+- Manage permitted IP addresses
+- Update CEGP gateway settings
+- Modify scaling parameters
+- Adjust rate limiting
+
+### 🔍 **Status and Diagnostics**
+- Deployment health checks
+- Pod status and logs
+- Queue monitoring
+- Performance metrics
+
+### 🧪 **Testing and Validation**
+- Automated connectivity tests
+- SMTP protocol validation
+- Load testing capabilities
+- Integration verification
+
+### CEGP Console Setup
+After deployment, configure CEGP console:
+1. Add Domain: `your-domain.com`
 2. Type: **User-defined mail servers**
-3. Server: `<LoadBalancer-IP>:25`
+3. Server: `<LoadBalancer-IP>:25` (shown after deployment)
 4. Preference: `10`
 5. Test Connection
 
