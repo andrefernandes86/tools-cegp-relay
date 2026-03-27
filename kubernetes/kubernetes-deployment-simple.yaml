@@ -278,6 +278,16 @@ spec:
               value: "permit_mynetworks,reject_invalid_helo_hostname,permit"
             - name: POSTFIX_smtpd_relay_restrictions
               value: "permit_mynetworks,reject_unauth_destination,permit"
+            - name: POSTFIX_default_destination_concurrency_limit
+              value: "2"
+            - name: POSTFIX_smtp_destination_concurrency_limit
+              value: "2"
+            - name: POSTFIX_smtp_destination_rate_delay
+              value: "2s"
+            - name: POSTFIX_minimal_backoff_time
+              value: "300s"
+            - name: POSTFIX_maximal_backoff_time
+              value: "3600s"
             
             # Disable unnecessary features that might cause issues
             - name: POSTFIX_disable_vrfy_command

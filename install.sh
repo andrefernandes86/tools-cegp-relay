@@ -76,7 +76,19 @@ validate_cidr() {
 # Function to validate domain
 validate_domain() {
     local domain=$1
-    if [[ $domain =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+    # Require fully-qualified domain (at least one dot), valid labels, and alpha TLD (>=2 chars).
+    # Examples accepted: qubitdefense.io, mail.example.co
+    # Examples rejected: sone, localhost, -bad.com, bad-.com, bad..com
+    if [[ $domain =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# Function to validate email address
+validate_email() {
+    local email=$1
+    if [[ $email =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
         return 0
     fi
     return 1
@@ -260,48 +272,15 @@ enforce_storage_scaling_constraints() {
 get_cegp_config() {
     print_header "CEGP CLOUD EMAIL GATEWAY CONFIGURATION"
     
-    print_status "Select CEGP Gateway configuration:"
-    echo "1) Trend Micro tenant endpoint"
-    echo "2) Custom destination (IP or FQDN)"
-    
-    read -p "Enter your choice (1-2, default: 1): " cegp_choice
-    cegp_choice=${cegp_choice:-1}
-    
-    case $cegp_choice in
-        1)
-            print_status "Enter either:"
-            print_status "- tenant prefix (example: company-onmicrosoft-com)"
-            print_status "- OR full host (example: company-onmicrosoft-com.in.tmes.trendmicro.com)"
-            read -p "Tenant prefix or full host: " tenant_prefix
-            if [[ -n "$tenant_prefix" ]]; then
-                # If user entered a full hostname (contains dots), keep as-is.
-                if [[ "$tenant_prefix" == *.* ]]; then
-                    CEGP_HOST="$tenant_prefix"
-                else
-                    CEGP_HOST="${tenant_prefix}.relay.tmes.trendmicro.com"
-                fi
-            else
-                print_error "Tenant prefix is required"
-                get_cegp_config
-                return
-            fi
-            ;;
-        2)
-            read -p "Enter destination IP address or FQDN: " custom_host
-            if [[ -n "$custom_host" ]]; then
-                CEGP_HOST="$custom_host"
-            else
-                print_error "Destination IP address or FQDN is required"
-                get_cegp_config
-                return
-            fi
-            ;;
-        *)
-            print_warning "Invalid choice, using tenant configuration"
-            get_cegp_config
-            return
-            ;;
-    esac
+    print_status "Enter destination for next-hop relay."
+    read -p "Destination IP address or FQDN: " custom_host
+    if [[ -n "$custom_host" ]]; then
+        CEGP_HOST="$custom_host"
+    else
+        print_error "Destination IP address or FQDN is required"
+        get_cegp_config
+        return
+    fi
     
     read -p "CEGP Gateway port (default: 25): " cegp_port
     CEGP_PORT=${cegp_port:-25}
@@ -337,6 +316,11 @@ get_authorized_domains() {
                 elif [[ -z "$domain" ]]; then
                     print_error "Please enter a domain or 'done' to finish"
                 elif validate_domain "$domain"; then
+                    # Prevent duplicates
+                    if [[ ",$AUTHORIZED_DOMAINS," == *",$domain,"* ]]; then
+                        print_warning "Domain already added: $domain"
+                        continue
+                    fi
                     if [[ -z "$AUTHORIZED_DOMAINS" ]]; then
                         AUTHORIZED_DOMAINS="$domain"
                     else
@@ -1044,6 +1028,89 @@ run_tests() {
     fi
 }
 
+# Function to send throttled test messages (to avoid upstream rate limits)
+send_throttled_test_messages() {
+    print_header "SEND THROTTLED TEST MESSAGES"
+
+    if ! load_config; then
+        print_error "No configuration found. Please run installation first."
+        return 1
+    fi
+
+    local from_email to_email message_count delay_seconds
+
+    while true; do
+        read -p "Source email address: " from_email
+        if validate_email "$from_email"; then
+            break
+        fi
+        print_error "Invalid source email format."
+    done
+
+    while true; do
+        read -p "Destination email address: " to_email
+        if validate_email "$to_email"; then
+            break
+        fi
+        print_error "Invalid destination email format."
+    done
+
+    while true; do
+        read -p "How many messages to send (1-1000): " message_count
+        if [[ "$message_count" =~ ^[0-9]+$ ]] && [[ $message_count -ge 1 && $message_count -le 1000 ]]; then
+            break
+        fi
+        print_error "Please enter a number between 1 and 1000."
+    done
+
+    # Safer defaults to avoid recipient throttling (Trend Ratelimit-2).
+    read -p "Delay between messages in seconds (default: 2): " delay_seconds
+    delay_seconds=${delay_seconds:-2}
+    if ! [[ "$delay_seconds" =~ ^[0-9]+$ ]] || [[ $delay_seconds -lt 1 ]]; then
+        print_warning "Invalid delay; using 2 seconds."
+        delay_seconds=2
+    fi
+
+    print_status "Preparing test run:"
+    echo "- From: $from_email"
+    echo "- To: $to_email"
+    echo "- Count: $message_count"
+    echo "- Delay: ${delay_seconds}s"
+
+    local pod_name
+    pod_name=$(execute_kubectl "k0s kubectl get pods -n $NAMESPACE -l app=cegp-smtp-relay --no-headers 2>/dev/null | awk '\$2 ~ /^1\\/1$/ && \$3 == \"Running\" {print \$1; exit}'")
+    if [[ -z "$pod_name" ]]; then
+        print_error "No running relay pod found."
+        return 1
+    fi
+
+    local sent_count=0 failed_count=0
+    local ts
+    ts=$(date +%Y%m%d-%H%M%S)
+
+    print_status "Sending messages from pod: $pod_name"
+    for ((i=1; i<=message_count; i++)); do
+        local subject body
+        subject="CEGP relay test ${ts} #${i}"
+        body="hello world (message ${i}/${message_count})"
+
+        if execute_kubectl "k0s kubectl exec -n $NAMESPACE $pod_name -- sh -lc \"printf 'From: ${from_email}\nTo: ${to_email}\nSubject: ${subject}\n\n${body}\n' | sendmail -t\" >/dev/null 2>&1"; then
+            ((sent_count++))
+            print_status "Sent ${sent_count}/${message_count}"
+        else
+            ((failed_count++))
+            print_warning "Failed to submit message #${i}"
+        fi
+
+        if [[ $i -lt $message_count ]]; then
+            sleep "$delay_seconds"
+        fi
+    done
+
+    print_success "Test submission complete. Sent: $sent_count, Failed: $failed_count"
+    print_status "Tip: monitor queue drain with option 3 (real-time metrics) and option 6 (logs)."
+}
+
 # Function to uninstall
 uninstall() {
     print_header "UNINSTALL CEGP SMTP RELAY"
@@ -1095,9 +1162,10 @@ show_main_menu() {
         echo "9)  Backup configuration"
         echo "10) Restore configuration"
         echo "11) Uninstall"
-        echo "12) Exit"
+        echo "12) Send throttled test messages"
+        echo "13) Exit"
         
-        read -p "Enter your choice (1-12): " choice
+        read -p "Enter your choice (1-13): " choice
         
         case $choice in
             1)
@@ -1190,11 +1258,15 @@ show_main_menu() {
                 read -p "Press Enter to continue..."
                 ;;
             12)
+                send_throttled_test_messages
+                read -p "Press Enter to continue..."
+                ;;
+            13)
                 print_status "Goodbye!"
                 exit 0
                 ;;
             *)
-                print_error "Invalid choice. Please select 1-12."
+                print_error "Invalid choice. Please select 1-13."
                 sleep 2
                 ;;
         esac
