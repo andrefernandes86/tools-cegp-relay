@@ -1244,10 +1244,12 @@ send_throttled_test_messages() {
         body="hello world (message ${i}/${message_count})"
 
         if execute_kubectl "k0s kubectl exec -n $NAMESPACE $pod_name -- sh -lc \"printf 'From: ${from_email}\nTo: ${to_email}\nSubject: ${subject}\n\n${body}\n' | sendmail -t\" >/dev/null 2>&1"; then
-            ((sent_count++))
-            print_status "Sent ${sent_count}/${message_count}"
+            sent_count=$((sent_count + 1))
+            if (( sent_count == 1 || sent_count % 10 == 0 || sent_count == message_count )); then
+                print_status "Sent ${sent_count}/${message_count}"
+            fi
         else
-            ((failed_count++))
+            failed_count=$((failed_count + 1))
             print_warning "Failed to submit message #${i}"
         fi
 
