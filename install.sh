@@ -457,10 +457,17 @@ deploy_application() {
     print_status "Installing local-path provisioner..."
     execute_kubectl "k0s kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.28/deploy/local-path-storage.yaml"
     
+    print_status "Validating generated manifest..."
+    if [[ "$DEPLOYMENT_TYPE" == "remote" ]]; then
+        # Copy deployment files to remote server for validation and apply
+        scp -r kubernetes/ "$REMOTE_USER@$REMOTE_SERVER:~/cegp-relay-deploy/"
+        execute_kubectl "k0s kubectl apply --dry-run=client -f ~/cegp-relay-deploy/kubernetes-deployment-configured.yaml >/dev/null"
+    else
+        execute_kubectl "k0s kubectl apply --dry-run=client -f kubernetes/kubernetes-deployment-configured.yaml >/dev/null"
+    fi
+
     print_status "Deploying CEGP SMTP Relay..."
     if [[ "$DEPLOYMENT_TYPE" == "remote" ]]; then
-        # Copy deployment files to remote server
-        scp -r kubernetes/ "$REMOTE_USER@$REMOTE_SERVER:~/cegp-relay-deploy/"
         execute_kubectl "k0s kubectl apply -f ~/cegp-relay-deploy/kubernetes-deployment-configured.yaml"
     else
         execute_kubectl "k0s kubectl apply -f kubernetes/kubernetes-deployment-configured.yaml"
@@ -528,65 +535,8 @@ update_deployment_files() {
         { print }
     ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     
-    # Update ConfigMaps with domains and IPs
-    create_configmap_updates
-    
     # Copy back the updated file
     cp "$TEMP_CONFIG" kubernetes/kubernetes-deployment-configured.yaml
-}
-
-# Function to create ConfigMap updates
-create_configmap_updates() {
-    # Create a new ConfigMap section with updated domains and IPs
-    local configmap_section=""
-    
-    # Build domains configuration
-    if [[ -n "$AUTHORIZED_DOMAINS" ]]; then
-        configmap_section="    domains.conf: |\n"
-        IFS=',' read -ra DOMAINS <<< "$AUTHORIZED_DOMAINS"
-        for domain in "${DOMAINS[@]}"; do
-            configmap_section="${configmap_section}      ${domain}\n"
-        done
-    else
-        configmap_section="    domains.conf: |\n      # No domains configured\n"
-    fi
-    
-    configmap_section="${configmap_section}  \n"
-    
-    # Build IPs configuration
-    configmap_section="${configmap_section}    permit-ips.conf: |\n"
-    if [[ -n "$AUTHORIZED_IPS" ]]; then
-        IFS=',' read -ra IPS <<< "$AUTHORIZED_IPS"
-        for ip in "${IPS[@]}"; do
-            configmap_section="${configmap_section}      ${ip}\n"
-        done
-    else
-        configmap_section="${configmap_section}      # No IP restrictions configured\n"
-    fi
-    
-    # Write the updated section to a temporary file
-    echo -e "$configmap_section" > /tmp/configmap_update
-    
-    # Use awk to replace the ConfigMap data section
-    awk '
-        /domains\.conf: \|/ { 
-            in_configmap = 1
-            while ((getline line < "/tmp/configmap_update") > 0) {
-                print line
-            }
-            close("/tmp/configmap_update")
-        }
-        /rate-limits\.conf: \|/ && in_configmap { 
-            in_configmap = 0
-            print
-            next
-        }
-        !in_configmap { print }
-        in_configmap && !/domains\.conf: \|/ && !/permit-ips\.conf: \|/ { next }
-    ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
-    
-    # Clean up
-    rm -f /tmp/configmap_update
 }
 
 # Function to check deployment status
