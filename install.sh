@@ -262,7 +262,7 @@ get_cegp_config() {
     
     print_status "Select CEGP Gateway configuration:"
     echo "1) Trend Micro tenant endpoint"
-    echo "2) Custom hostname"
+    echo "2) Custom destination (IP or FQDN)"
     
     read -p "Enter your choice (1-2, default: 1): " cegp_choice
     cegp_choice=${cegp_choice:-1}
@@ -287,11 +287,11 @@ get_cegp_config() {
             fi
             ;;
         2)
-            read -p "Enter custom CEGP hostname: " custom_host
+            read -p "Enter destination IP address or FQDN: " custom_host
             if [[ -n "$custom_host" ]]; then
                 CEGP_HOST="$custom_host"
             else
-                print_error "Custom hostname is required"
+                print_error "Destination IP address or FQDN is required"
                 get_cegp_config
                 return
             fi
