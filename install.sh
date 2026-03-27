@@ -387,18 +387,28 @@ update_deployment_files() {
     # Create temporary deployment file
     cp kubernetes/kubernetes-deployment-simple.yaml "$TEMP_CONFIG"
     
+    # Use a more robust approach with temporary files and simple replacements
     # Update replicas
-    sed -i "s/replicas: 3/replicas: $MIN_REPLICAS/g" "$TEMP_CONFIG"
-    sed -i "s/minReplicas: 3/minReplicas: $MIN_REPLICAS/g" "$TEMP_CONFIG"
-    sed -i "s/maxReplicas: 20/maxReplicas: $MAX_REPLICAS/g" "$TEMP_CONFIG"
+    awk -v min="$MIN_REPLICAS" -v max="$MAX_REPLICAS" '
+        /replicas: 3/ { gsub(/3/, min) }
+        /minReplicas: 3/ { gsub(/3/, min) }
+        /maxReplicas: 20/ { gsub(/20/, max) }
+        { print }
+    ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     
     # Update CEGP configuration
-    sed -i "s/relay\.mx\.trendmicro\.com/$CEGP_HOST/g" "$TEMP_CONFIG"
-    sed -i "s/value: \"25\"/value: \"$CEGP_PORT\"/g" "$TEMP_CONFIG"
+    awk -v host="$CEGP_HOST" -v port="$CEGP_PORT" '
+        /relay\.mx\.trendmicro\.com/ { gsub(/relay\.mx\.trendmicro\.com/, host) }
+        /CEGP_PORT:.*value: "25"/ { gsub(/"25"/, "\"" port "\"") }
+        { print }
+    ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     
     # Update rate limits
-    sed -i "s/value: \"2000\"/value: \"$RATE_LIMIT_IP_PER_MIN\"/g" "$TEMP_CONFIG"
-    sed -i "s/value: \"200\"/value: \"$RATE_LIMIT_RCPT_PER_MIN\"/g" "$TEMP_CONFIG"
+    awk -v rate_ip="$RATE_LIMIT_IP_PER_MIN" -v rate_rcpt="$RATE_LIMIT_RCPT_PER_MIN" '
+        /RATE_LIMIT_IP_PER_MIN:.*value: "2000"/ { gsub(/"2000"/, "\"" rate_ip "\"") }
+        /RATE_LIMIT_RCPT_PER_MIN:.*value: "200"/ { gsub(/"200"/, "\"" rate_rcpt "\"") }
+        { print }
+    ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     
     # Update ConfigMaps with domains and IPs
     create_configmap_updates
@@ -409,35 +419,56 @@ update_deployment_files() {
 
 # Function to create ConfigMap updates
 create_configmap_updates() {
-    # Create domains configuration
+    # Create a new ConfigMap section with updated domains and IPs
+    local configmap_section=""
+    
+    # Build domains configuration
     if [[ -n "$AUTHORIZED_DOMAINS" ]]; then
+        configmap_section="    domains.conf: |\n"
         IFS=',' read -ra DOMAINS <<< "$AUTHORIZED_DOMAINS"
-        DOMAINS_CONFIG=""
         for domain in "${DOMAINS[@]}"; do
-            DOMAINS_CONFIG="$DOMAINS_CONFIG$domain\n"
+            configmap_section="${configmap_section}      ${domain}\n"
         done
-        
-        # Update domains in deployment file
-        sed -i "/domains\.conf: |/,/# /c\\
-    domains.conf: |\\
-$(echo -e "$DOMAINS_CONFIG" | sed 's/^/      /')" "$TEMP_CONFIG"
+    else
+        configmap_section="    domains.conf: |\n      # No domains configured\n"
     fi
     
-    # Create IPs configuration
+    configmap_section="${configmap_section}  \n"
+    
+    # Build IPs configuration
+    configmap_section="${configmap_section}    permit-ips.conf: |\n"
     if [[ -n "$AUTHORIZED_IPS" ]]; then
         IFS=',' read -ra IPS <<< "$AUTHORIZED_IPS"
-        IPS_CONFIG=""
         for ip in "${IPS[@]}"; do
-            IPS_CONFIG="$IPS_CONFIG$ip\n"
+            configmap_section="${configmap_section}      ${ip}\n"
         done
-        
-        # Update IPs in deployment file
-        sed -i "/permit-ips\.conf: |/,/rate-limits\.conf:/c\\
-    permit-ips.conf: |\\
-$(echo -e "$IPS_CONFIG" | sed 's/^/      /')\\
-  \\
-    rate-limits.conf: |" "$TEMP_CONFIG"
+    else
+        configmap_section="${configmap_section}      # No IP restrictions configured\n"
     fi
+    
+    # Write the updated section to a temporary file
+    echo -e "$configmap_section" > /tmp/configmap_update
+    
+    # Use awk to replace the ConfigMap data section
+    awk '
+        /domains\.conf: \|/ { 
+            in_configmap = 1
+            while ((getline line < "/tmp/configmap_update") > 0) {
+                print line
+            }
+            close("/tmp/configmap_update")
+        }
+        /rate-limits\.conf: \|/ && in_configmap { 
+            in_configmap = 0
+            print
+            next
+        }
+        !in_configmap { print }
+        in_configmap && !/domains\.conf: \|/ && !/permit-ips\.conf: \|/ { next }
+    ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
+    
+    # Clean up
+    rm -f /tmp/configmap_update
 }
 
 # Function to check deployment status
