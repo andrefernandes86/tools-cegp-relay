@@ -1209,18 +1209,17 @@ show_main_menu() {
         echo "2)  Show deployment status"
         echo "3)  Monitor real-time metrics"
         echo "4)  Manage configuration"
-        echo "5)  Run tests"
-        echo "6)  View logs"
-        echo "7)  Restart deployment"
-        echo "8)  Scale deployment"
-        echo "9)  Backup configuration"
-        echo "10) Restore configuration"
-        echo "11) Uninstall"
-        echo "12) Send throttled test messages"
-        echo "13) Show connection information"
-        echo "14) Exit"
+        echo "5)  View logs"
+        echo "6)  Restart deployment"
+        echo "7)  Scale deployment"
+        echo "8)  Backup configuration"
+        echo "9)  Restore configuration"
+        echo "10) Uninstall"
+        echo "11) Send throttled test messages"
+        echo "12) Show connection information"
+        echo "13) Exit"
         
-        read -p "Enter your choice (1-14): " choice
+        read -p "Enter your choice (1-13): " choice
         
         case $choice in
             1)
@@ -1250,10 +1249,6 @@ show_main_menu() {
                 manage_configuration
                 ;;
             5)
-                run_tests
-                read -p "Press Enter to continue..."
-                ;;
-            6)
                 if load_config; then
                     print_header "RECENT LOGS"
                     execute_kubectl "k0s kubectl logs -l app=cegp-smtp-relay -n $NAMESPACE --tail=50"
@@ -1262,7 +1257,7 @@ show_main_menu() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            7)
+            6)
                 if load_config; then
                     print_status "Restarting deployment..."
                     execute_kubectl "k0s kubectl rollout restart deployment cegp-smtp-relay -n $NAMESPACE"
@@ -1272,7 +1267,7 @@ show_main_menu() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            8)
+            7)
                 if load_config; then
                     read -p "Enter desired number of replicas ($MIN_REPLICAS-$MAX_REPLICAS): " replicas
                     enforce_storage_scaling_constraints
@@ -1287,7 +1282,7 @@ show_main_menu() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            9)
+            8)
                 if [[ -f "$CONFIG_FILE" ]]; then
                     cp "$CONFIG_FILE" "./config/deployment-backup-$(date +%Y%m%d-%H%M%S).conf"
                     print_success "Configuration backed up"
@@ -1296,7 +1291,7 @@ show_main_menu() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            10)
+            9)
                 echo "Available backups:"
                 ls -la ./config/deployment-backup-*.conf 2>/dev/null || echo "No backups found"
                 read -p "Enter backup filename to restore (or press Enter to cancel): " backup_file
@@ -1308,24 +1303,24 @@ show_main_menu() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            11)
+            10)
                 uninstall
                 read -p "Press Enter to continue..."
                 ;;
-            12)
+            11)
                 send_throttled_test_messages
                 read -p "Press Enter to continue..."
                 ;;
-            13)
+            12)
                 show_connection_info
                 read -p "Press Enter to continue..."
                 ;;
-            14)
+            13)
                 print_status "Goodbye!"
                 exit 0
                 ;;
             *)
-                print_error "Invalid choice. Please select 1-14."
+                print_error "Invalid choice. Please select 1-13."
                 sleep 2
                 ;;
         esac
