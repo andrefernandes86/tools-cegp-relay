@@ -234,8 +234,41 @@ get_remote_config() {
 get_cegp_config() {
     print_header "CEGP CLOUD EMAIL GATEWAY CONFIGURATION"
     
-    read -p "CEGP Gateway hostname (default: relay.mx.trendmicro.com): " cegp_host
-    CEGP_HOST=${cegp_host:-"relay.mx.trendmicro.com"}
+    print_status "Select CEGP Gateway configuration:"
+    echo "1) Trend Micro Cloud (default: relay.mx.trendmicro.com)"
+    echo "2) Custom Trend Micro tenant (e.g., company-onmicrosoft-com.relay.tmes.trendmicro.com)"
+    echo "3) Custom hostname"
+    
+    read -p "Enter your choice (1-3, default: 1): " cegp_choice
+    cegp_choice=${cegp_choice:-1}
+    
+    case $cegp_choice in
+        1)
+            CEGP_HOST="relay.mx.trendmicro.com"
+            ;;
+        2)
+            read -p "Enter your tenant prefix (e.g., 'company-onmicrosoft-com'): " tenant_prefix
+            if [[ -n "$tenant_prefix" ]]; then
+                CEGP_HOST="${tenant_prefix}.relay.tmes.trendmicro.com"
+            else
+                print_warning "No tenant prefix provided, using default"
+                CEGP_HOST="relay.mx.trendmicro.com"
+            fi
+            ;;
+        3)
+            read -p "Enter custom CEGP hostname: " custom_host
+            if [[ -n "$custom_host" ]]; then
+                CEGP_HOST="$custom_host"
+            else
+                print_warning "No hostname provided, using default"
+                CEGP_HOST="relay.mx.trendmicro.com"
+            fi
+            ;;
+        *)
+            print_warning "Invalid choice, using default"
+            CEGP_HOST="relay.mx.trendmicro.com"
+            ;;
+    esac
     
     read -p "CEGP Gateway port (default: 25): " cegp_port
     CEGP_PORT=${cegp_port:-25}
@@ -245,61 +278,134 @@ get_cegp_config() {
         print_warning "Invalid port, using default 25"
         CEGP_PORT=25
     fi
+    
+    print_success "CEGP Gateway: $CEGP_HOST:$CEGP_PORT"
 }
 
 # Function to get authorized domains
 get_authorized_domains() {
     print_header "AUTHORIZED EMAIL DOMAINS"
-    print_status "Enter the email domains that are allowed to send through this relay"
-    print_status "Examples: company.com, subsidiary.org, branch.local"
+    print_status "Configure email domains that are allowed to send through this relay"
     
-    AUTHORIZED_DOMAINS=""
-    while true; do
-        read -p "Enter domain (or 'done' to finish): " domain
-        if [[ "$domain" == "done" ]]; then
-            break
-        elif validate_domain "$domain"; then
-            if [[ -z "$AUTHORIZED_DOMAINS" ]]; then
-                AUTHORIZED_DOMAINS="$domain"
-            else
-                AUTHORIZED_DOMAINS="$AUTHORIZED_DOMAINS,$domain"
+    echo "1) Add domains manually"
+    echo "2) Use common business domains (gmail.com, outlook.com, company.local)"
+    echo "3) Allow all domains (not recommended for production)"
+    
+    read -p "Enter your choice (1-3, default: 1): " domain_choice
+    domain_choice=${domain_choice:-1}
+    
+    case $domain_choice in
+        1)
+            print_status "Enter domains one by one. Examples: company.com, subsidiary.org, branch.local"
+            AUTHORIZED_DOMAINS=""
+            while true; do
+                read -p "Enter domain (or 'done' to finish): " domain
+                if [[ "$domain" == "done" ]]; then
+                    break
+                elif [[ -z "$domain" ]]; then
+                    print_error "Please enter a domain or 'done' to finish"
+                elif validate_domain "$domain"; then
+                    if [[ -z "$AUTHORIZED_DOMAINS" ]]; then
+                        AUTHORIZED_DOMAINS="$domain"
+                    else
+                        AUTHORIZED_DOMAINS="$AUTHORIZED_DOMAINS,$domain"
+                    fi
+                    print_success "Added domain: $domain"
+                else
+                    print_error "Invalid domain format: $domain"
+                fi
+            done
+            ;;
+        2)
+            print_status "Using common business domains..."
+            AUTHORIZED_DOMAINS="gmail.com,outlook.com,hotmail.com,company.local,corp.local"
+            print_success "Added domains: $AUTHORIZED_DOMAINS"
+            read -p "Add additional domain (or press Enter to continue): " additional_domain
+            if [[ -n "$additional_domain" ]] && validate_domain "$additional_domain"; then
+                AUTHORIZED_DOMAINS="$AUTHORIZED_DOMAINS,$additional_domain"
+                print_success "Added additional domain: $additional_domain"
             fi
-            print_success "Added domain: $domain"
-        else
-            print_error "Invalid domain format: $domain"
-        fi
-    done
+            ;;
+        3)
+            print_warning "Allowing all domains (not recommended for production)"
+            AUTHORIZED_DOMAINS=""
+            ;;
+        *)
+            print_warning "Invalid choice, using manual entry"
+            get_authorized_domains
+            return
+            ;;
+    esac
     
     if [[ -z "$AUTHORIZED_DOMAINS" ]]; then
-        print_warning "No domains specified. All domains will be allowed (not recommended for production)"
+        print_warning "No domain restrictions configured. All domains will be allowed."
     fi
 }
 
 # Function to get authorized IP addresses
 get_authorized_ips() {
     print_header "AUTHORIZED IP ADDRESSES"
-    print_status "Enter IP addresses/networks that are allowed to send through this relay"
-    print_status "Use CIDR notation. Examples: 192.168.1.0/24, 10.0.0.0/8, 172.16.5.10/32"
+    print_status "Configure IP addresses/networks that are allowed to send through this relay"
     
-    AUTHORIZED_IPS=""
-    while true; do
-        read -p "Enter IP/CIDR (or 'done' to finish): " ip_cidr
-        if [[ "$ip_cidr" == "done" ]]; then
-            break
-        elif validate_cidr "$ip_cidr" || validate_ip "$ip_cidr"; then
-            if [[ -z "$AUTHORIZED_IPS" ]]; then
-                AUTHORIZED_IPS="$ip_cidr"
-            else
-                AUTHORIZED_IPS="$AUTHORIZED_IPS,$ip_cidr"
-            fi
-            print_success "Added IP/network: $ip_cidr"
-        else
-            print_error "Invalid IP/CIDR format: $ip_cidr"
-        fi
-    done
+    echo "1) Add IP ranges manually"
+    echo "2) Common private networks (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12)"
+    echo "3) Kubernetes cluster only (10.0.0.0/8, 172.16.0.0/12)"
+    echo "4) Local network only (192.168.0.0/16)"
+    echo "5) Allow all IPs (not recommended for production)"
+    
+    read -p "Enter your choice (1-5, default: 2): " ip_choice
+    ip_choice=${ip_choice:-2}
+    
+    case $ip_choice in
+        1)
+            print_status "Enter IP addresses/networks in CIDR notation"
+            print_status "Examples: 192.168.1.0/24, 10.0.0.0/8, 172.16.5.10/32"
+            AUTHORIZED_IPS=""
+            while true; do
+                read -p "Enter IP/CIDR (or 'done' to finish): " ip_cidr
+                if [[ "$ip_cidr" == "done" ]]; then
+                    break
+                elif [[ -z "$ip_cidr" ]]; then
+                    print_error "Please enter an IP/CIDR or 'done' to finish"
+                elif validate_cidr "$ip_cidr" || validate_ip "$ip_cidr"; then
+                    if [[ -z "$AUTHORIZED_IPS" ]]; then
+                        AUTHORIZED_IPS="$ip_cidr"
+                    else
+                        AUTHORIZED_IPS="$AUTHORIZED_IPS,$ip_cidr"
+                    fi
+                    print_success "Added IP/network: $ip_cidr"
+                else
+                    print_error "Invalid IP/CIDR format: $ip_cidr"
+                fi
+            done
+            ;;
+        2)
+            print_status "Using common private networks..."
+            AUTHORIZED_IPS="192.168.0.0/16,10.0.0.0/8,172.16.0.0/12"
+            print_success "Added networks: $AUTHORIZED_IPS"
+            ;;
+        3)
+            print_status "Using Kubernetes cluster networks..."
+            AUTHORIZED_IPS="10.0.0.0/8,172.16.0.0/12"
+            print_success "Added networks: $AUTHORIZED_IPS"
+            ;;
+        4)
+            print_status "Using local network only..."
+            AUTHORIZED_IPS="192.168.0.0/16"
+            print_success "Added network: $AUTHORIZED_IPS"
+            ;;
+        5)
+            print_warning "Allowing all IPs (not recommended for production)"
+            AUTHORIZED_IPS=""
+            ;;
+        *)
+            print_warning "Invalid choice, using common private networks"
+            AUTHORIZED_IPS="192.168.0.0/16,10.0.0.0/8,172.16.0.0/12"
+            ;;
+    esac
     
     if [[ -z "$AUTHORIZED_IPS" ]]; then
-        print_warning "No IP restrictions specified. All IPs will be allowed (not recommended for production)"
+        print_warning "No IP restrictions configured. All IPs will be allowed."
     fi
 }
 
@@ -398,15 +504,21 @@ update_deployment_files() {
     
     # Update CEGP configuration
     awk -v host="$CEGP_HOST" -v port="$CEGP_PORT" '
+        /RELAYHOST/ { gsub(/relay\.mx\.trendmicro\.com:25/, host ":" port) }
         /relay\.mx\.trendmicro\.com/ { gsub(/relay\.mx\.trendmicro\.com/, host) }
-        /CEGP_PORT:.*value: "25"/ { gsub(/"25"/, "\"" port "\"") }
         { print }
     ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     
-    # Update rate limits
-    awk -v rate_ip="$RATE_LIMIT_IP_PER_MIN" -v rate_rcpt="$RATE_LIMIT_RCPT_PER_MIN" '
-        /RATE_LIMIT_IP_PER_MIN:.*value: "2000"/ { gsub(/"2000"/, "\"" rate_ip "\"") }
-        /RATE_LIMIT_RCPT_PER_MIN:.*value: "200"/ { gsub(/"200"/, "\"" rate_rcpt "\"") }
+    # Update rate limits and domains/IPs in environment variables
+    awk -v rate_ip="$RATE_LIMIT_IP_PER_MIN" -v rate_rcpt="$RATE_LIMIT_RCPT_PER_MIN" -v domains="$AUTHORIZED_DOMAINS" -v ips="$AUTHORIZED_IPS" '
+        /RATE_LIMIT_IP_PER_MIN:.*value:/ { gsub(/value: "[^"]*"/, "value: \"" rate_ip "\"") }
+        /RATE_LIMIT_RCPT_PER_MIN:.*value:/ { gsub(/value: "[^"]*"/, "value: \"" rate_rcpt "\"") }
+        /ALLOWED_SENDER_DOMAINS/ { gsub(/value: "[^"]*"/, "value: \"" domains "\"") }
+        /MYNETWORKS/ && ips != "" { 
+            # Add authorized IPs to MYNETWORKS
+            gsub(/value: "([^"]*)"/, "value: \"\\1 " ips "\"")
+        }
+        /POSTFIX_relay_domains/ { gsub(/value: "[^"]*"/, "value: \"" domains "\"") }
         { print }
     ' "$TEMP_CONFIG" > "${TEMP_CONFIG}.tmp" && mv "${TEMP_CONFIG}.tmp" "$TEMP_CONFIG"
     

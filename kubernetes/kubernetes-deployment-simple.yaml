@@ -229,6 +229,18 @@ spec:
       # Graceful shutdown: allow 60s for in-flight messages
       terminationGracePeriodSeconds: 60
       
+      # Init container to copy configuration
+      initContainers:
+        - name: config-init
+          image: busybox:latest
+          command: ['sh', '-c', 'cp /etc/postfix-config/* /etc/postfix/ 2>/dev/null || true']
+          volumeMounts:
+            - name: postfix-config
+              mountPath: /etc/postfix-config/
+              readOnly: true
+            - name: postfix-runtime
+              mountPath: /etc/postfix/
+      
       containers:
         - name: relay
           image: boky/postfix:latest  # Popular Postfix container image
@@ -249,41 +261,37 @@ spec:
               protocol: TCP
           
           env:
-            # CEGP Configuration
-            - name: CEGP_HOST
-              value: "relay.mx.trendmicro.com"
-            - name: CEGP_PORT
-              value: "25"
-            - name: CEGP_USE_TLS
-              value: "true"
-            
-            # Rate Limiting
-            - name: RATE_LIMIT_IP_PER_MIN
-              value: "2000"
-            - name: RATE_LIMIT_RCPT_PER_MIN
-              value: "200"
-            - name: RATE_LIMIT_OUTBOUND_IP_PER_5MIN
-              value: "1000"
-            
-            # Connection Control
-            - name: CONNECTION_MODE
-              value: "permit"
-            
-            # Message Rules
-            - name: MAX_MESSAGE_SIZE
+            # Boky/Postfix specific configuration
+            - name: HOSTNAME
+              value: "relay.email-security.svc.cluster.local"
+            - name: RELAYHOST
+              value: "relay.mx.trendmicro.com:25"
+            - name: ALLOWED_SENDER_DOMAINS
+              value: "qubitdefense.io"
+            - name: MYNETWORKS
+              value: "127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128 192.168.0.0/16"
+            - name: MESSAGE_SIZE_LIMIT
               value: "52428800"
-            - name: MAX_RECIPIENTS
-              value: "99999"
+            - name: POSTFIX_myhostname
+              value: "relay.email-security.svc.cluster.local"
+            - name: POSTFIX_mydestination
+              value: "localhost"
+            - name: POSTFIX_myorigin
+              value: "relay.email-security.svc.cluster.local"
+            - name: POSTFIX_relay_domains
+              value: "qubitdefense.io"
+            - name: POSTFIX_smtpd_recipient_restrictions
+              value: "permit_mynetworks,permit_sasl_authenticated,reject_unauth_destination,permit"
+            - name: POSTFIX_smtpd_sender_restrictions
+              value: "permit_mynetworks,permit_sasl_authenticated,reject_non_fqdn_sender,permit"
+            - name: POSTFIX_smtpd_helo_restrictions
+              value: "permit_mynetworks,permit_sasl_authenticated,reject_invalid_helo_hostname,permit"
             
-            # TLS Settings
-            - name: TLS_ENABLED
-              value: "false"  # Disabled until proper certs are generated
-            
-            # Files
-            - name: RELAY_DOMAINS_FILE
-              value: "/var/lib/relay-policy/domains.conf"
-            - name: PERMIT_LIST_FILE
-              value: "/var/lib/relay-policy/permit-ips.conf"
+            # Rate Limiting (for reference)
+            - name: RATE_LIMIT_IP_PER_MIN
+              value: "5000"
+            - name: RATE_LIMIT_RCPT_PER_MIN
+              value: "1000"
             
             # Logging
             - name: LOG_LEVEL
@@ -296,10 +304,12 @@ spec:
             - name: postfix-queue
               mountPath: /var/spool/postfix/
             
-            # Configuration
+            # Configuration (writable for boky/postfix container)
             - name: postfix-config
-              mountPath: /etc/postfix/
+              mountPath: /etc/postfix-config/
               readOnly: true
+            - name: postfix-runtime
+              mountPath: /etc/postfix/
             - name: relay-policy
               mountPath: /var/lib/relay-policy/
             
@@ -355,6 +365,8 @@ spec:
         - name: postfix-config
           configMap:
             name: postfix-config
+        - name: postfix-runtime
+          emptyDir: {}
         - name: relay-policy
           configMap:
             name: relay-policy
