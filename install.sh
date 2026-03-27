@@ -112,6 +112,8 @@ CLUSTER_TYPE="$CLUSTER_TYPE"
 MIN_REPLICAS="$MIN_REPLICAS"
 MAX_REPLICAS="$MAX_REPLICAS"
 MESSAGE_STORAGE_PATH="$MESSAGE_STORAGE_PATH"
+ENABLE_METALLB="$ENABLE_METALLB"
+METALLB_POOL_RANGE="$METALLB_POOL_RANGE"
 REMOTE_SERVER="$REMOTE_SERVER"
 REMOTE_USER="$REMOTE_USER"
 REMOTE_PASSWORD="$REMOTE_PASSWORD"
@@ -133,6 +135,8 @@ load_config() {
         # Backward compatibility for older config files.
         MESSAGE_STORAGE_PATH=${MESSAGE_STORAGE_PATH:-/mnt/nfs/messages}
         NAMESPACE=${NAMESPACE:-email-security}
+        ENABLE_METALLB=${ENABLE_METALLB:-false}
+        METALLB_POOL_RANGE=${METALLB_POOL_RANGE:-}
         return 0
     fi
     return 1
@@ -254,6 +258,29 @@ get_message_storage_path() {
     read -p "Host path for temporary messages (default: /mnt/nfs/messages): " storage_path
     MESSAGE_STORAGE_PATH=${storage_path:-/mnt/nfs/messages}
     print_success "Message storage path: $MESSAGE_STORAGE_PATH"
+}
+
+# Function to configure LoadBalancer IP provisioning (MetalLB for local clusters)
+get_loadbalancer_config() {
+    print_header "LOADBALANCER IP CONFIGURATION"
+    print_status "Local/bare-metal clusters need MetalLB to assign EXTERNAL-IP."
+    read -p "Enable MetalLB auto-install/configure? (yes/no, default: no): " metallb_choice
+    metallb_choice=${metallb_choice:-no}
+
+    if [[ "$metallb_choice" =~ ^(y|Y|yes|YES)$ ]]; then
+        ENABLE_METALLB=true
+        read -p "MetalLB IP pool range (CIDR range format, e.g. 192.168.40.240-192.168.40.250): " pool_range
+        if [[ -z "$pool_range" ]]; then
+            print_warning "No range provided; using default: 192.168.40.240-192.168.40.250"
+            pool_range="192.168.40.240-192.168.40.250"
+        fi
+        METALLB_POOL_RANGE="$pool_range"
+        print_success "MetalLB enabled with pool: $METALLB_POOL_RANGE"
+    else
+        ENABLE_METALLB=false
+        METALLB_POOL_RANGE=""
+        print_status "MetalLB auto-install disabled. Service EXTERNAL-IP may stay pending."
+    fi
 }
 
 enforce_storage_scaling_constraints() {
@@ -442,6 +469,46 @@ setup_remote_kubectl() {
     fi
 }
 
+# Function to install/configure MetalLB for local clusters
+install_metallb_if_enabled() {
+    if [[ "${ENABLE_METALLB:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ "$DEPLOYMENT_TYPE" != "local" ]]; then
+        print_warning "MetalLB auto-install currently supports local mode only. Skipping for remote."
+        return 0
+    fi
+
+    print_status "Installing MetalLB..."
+    execute_kubectl "k0s kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml"
+    execute_kubectl "k0s kubectl wait --namespace metallb-system --for=condition=available deployment/controller --timeout=180s"
+
+    print_status "Configuring MetalLB address pool: $METALLB_POOL_RANGE"
+    cat > /tmp/metallb-config.yaml <<EOF
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: cegp-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - $METALLB_POOL_RANGE
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: cegp-adv
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - cegp-pool
+EOF
+    execute_kubectl "k0s kubectl apply -f /tmp/metallb-config.yaml"
+    rm -f /tmp/metallb-config.yaml
+    print_success "MetalLB is installed/configured."
+}
+
 # Function to execute kubectl commands
 execute_kubectl() {
     local cmd="$1"
@@ -467,6 +534,8 @@ deploy_application() {
     
     print_status "Installing local-path provisioner..."
     execute_kubectl "k0s kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.28/deploy/local-path-storage.yaml"
+
+    install_metallb_if_enabled
     
     print_status "Validating generated manifest..."
     if [[ "$DEPLOYMENT_TYPE" == "remote" ]]; then
@@ -1253,6 +1322,7 @@ show_main_menu() {
                 get_deployment_type
                 get_cegp_config
                 get_message_storage_path
+                get_loadbalancer_config
                 get_authorized_domains
                 get_authorized_ips
                 get_rate_limits
